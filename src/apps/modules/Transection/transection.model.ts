@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 
-
 // TRANSACTION MODEL
 const TxSchema = new mongoose.Schema({
     amount: {
@@ -32,6 +31,10 @@ const TxSchema = new mongoose.Schema({
         type : String,
         required : true
 
+    },
+    transactionId : {
+        type : String,
+        required : true
     }
 });
 

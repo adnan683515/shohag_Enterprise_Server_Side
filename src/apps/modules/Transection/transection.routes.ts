@@ -25,3 +25,5 @@ transectionRouter.get('/detailsTransection/:id',auth,transactionDetailsControlle
 
 
 transectionRouter.put('/editTransection/:id',auth,adminOrSubadmin, updateTransaction) // update transection
+
+

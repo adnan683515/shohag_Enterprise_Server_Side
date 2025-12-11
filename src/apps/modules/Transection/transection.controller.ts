@@ -8,6 +8,12 @@ import { AppError } from './../../errorHelper/AppError'
 import { User } from "../user/user.model";
 import { appendTransactionToSheet } from "../../utils/googleSheet/appendGoogleSheet";
 import { generateTransactionId } from "../../utils/transectionId";
+import { getTransactionsFromSheet } from "../../utils/googleSheet/getDataFromGoogleSheet";
+import { updateSheetTransaction } from "../../utils/googleSheet/updateGoogleSheet";
+
+import { insertMergedTitle } from "../../utils/googleSheet/titleCreate";
+import Setting from "../Settings/settings";
+import nodeCron from "node-cron";
 
 
 
@@ -16,7 +22,11 @@ import { generateTransactionId } from "../../utils/transectionId";
 
 
 // admin and subadmin add transaction create
-export const CreateTransectionController = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const CreateTransectionController = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+) => {
     try {
         // Validate body
         const parsed = createTransactionSchema.safeParse(req.body);
@@ -25,58 +35,85 @@ export const CreateTransectionController = async (req: AuthRequest, res: Respons
         }
 
         const { amount, date, sender, receiver, medium } = parsed.data;
-
         const txDate = date ? new Date(date) : new Date();
 
-
-
+        // sender
         const senderUser = await User.findById(sender);
         if (!senderUser) throw new AppError(404, "Sender not found");
-
-        const receiverUser = await User.findById(receiver);
-        if (!receiverUser) throw new AppError(404, "Receiver not found");
-
-
-
         if (senderUser.parentId) {
             throw new AppError(400, `Sender '${senderUser.name}' is not self-dependent`);
         }
 
+        // receiver
+        const receiverUser = await User.findById(receiver);
+        if (!receiverUser) throw new AppError(404, "Receiver not found");
         if (receiverUser.parentId) {
             throw new AppError(400, `Receiver '${receiverUser.name}' is not self-dependent`);
         }
 
-        const mediumUser = await User.findById(medium);
-        if (!mediumUser) {
-            throw new AppError(404, "Medium user not found");
+        // -MEDIUM LOGIC (UserId OR Text) 
+        let mediumName: string = "";     // name for Google Sheet
+        let mediumValueForDB: any = "";  // value saved into MongoDB
+
+        const isObjectId = mongoose.Types.ObjectId.isValid(medium);
+
+        if (isObjectId) {
+            // medium is a USER ID
+            const mediumUser = await User.findById(medium);
+            if (!mediumUser) throw new AppError(404, "Medium user not found");
+
+            if (!mediumUser.parentId) {
+                throw new AppError(400, `Medium '${mediumUser.name}' is not valid (self-dependent)`);
+            }
+
+            mediumName = mediumUser.name; // Google Sheet
+            mediumValueForDB = medium;    // MongoDB
+        } else {
+            // medium is TEXT
+            mediumName = medium;
+            mediumValueForDB = medium;
         }
 
-        if (!mediumUser.parentId) {
-            throw new AppError(400, `Medium '${mediumUser.name}' is not valid because they are self-dependent `);
-        }
 
+        const txId = generateTransactionId();
 
+        // -Save to MongoDB
         const tx = await Transaction.create({
             amount,
             date: txDate,
             sender,
             receiver,
-            medium,
+            medium: mediumValueForDB,
+            transactionId: txId,
             year: txDate.getFullYear(),
             createdBy: req.user!.role,
         });
 
+        // Save also into Google Sheet
+        const sheetData = {
+            sender: senderUser.name,
+            receiver: receiverUser.name,
+            amount,
+            medium: mediumName,      // sheet gets name/text
+            transactionId: txId,
+            createdBy: req.user!.role,
+            date: txDate,
+        };
 
-        const txId = generateTransactionId()
+        await appendTransactionToSheet(sheetData);
 
-        const info = { sender: senderUser?.name, receiver: receiverUser?.name, amount, medium: mediumUser?.name, transactionId : txId, createdBy: req?.user?.role, date: txDate }
-        await appendTransactionToSheet(info)
-        
-        res.json(tx);
+        res.json({
+            success: true,
+            message: "Transaction created successfully",
+            data: tx,
+            sheetEntry: sheetData,
+        });
+
     } catch (err) {
         next(err);
     }
 };
+
 
 
 
@@ -87,12 +124,11 @@ export const viewallTransectionController = async (
     next: NextFunction
 ) => {
     try {
-        console.log(req?.query)
-        const { user, sender, receiver } = req.query;
+        const { user, sender, receiver, year, startDate, endDate } = req.query;
 
         const query: any = {};
 
-        // all transactions of one user (sender or receiver)
+        // Filter by user (sender or receiver)
         if (user) {
             if (!mongoose.Types.ObjectId.isValid(user as string)) {
                 throw new AppError(400, 'Invalid User Id');
@@ -103,7 +139,7 @@ export const viewallTransectionController = async (
             ];
         }
 
-        // sender + receiver pair
+        // Filter by sender + receiver pair
         if (sender && receiver) {
             if (!mongoose.Types.ObjectId.isValid(sender as string) || !mongoose.Types.ObjectId.isValid(receiver as string)) {
                 throw new AppError(400, 'Invalid Sender Or Receiver Id');
@@ -112,18 +148,53 @@ export const viewallTransectionController = async (
             query.receiver = new mongoose.Types.ObjectId(receiver as string);
         }
 
-        const list = await Transaction.find(query).sort({ date: -1 });
+        // Filter by year
+        if (year) {
+            query.year = Number(year);
+        }
+
+        // Filter by date range
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) {
+                query.date.$gte = new Date(startDate as string); // start date inclusive
+            }
+            if (endDate) {
+                query.date.$lte = new Date(endDate as string); // end date inclusive
+            }
+        }
+
+        let list = await Transaction.find(query).sort({ date: -1 });
+
+        // If user is provided but no MongoDB results, fallback to Google Sheet
+        if (user && list.length < 1) {
+            const getUserName = await User.findById(user);
+            const userName = getUserName?.name;
+            if (userName) {
+                const transectionDataFromSheet = await getTransactionsFromSheet(userName);
+                return res.json({
+                    success: true,
+                    count: transectionDataFromSheet.length,
+                    data: transectionDataFromSheet,
+                    source: "Google Sheet"
+                });
+            }
+        }
 
         return res.json({
             success: true,
             count: list.length,
+            source: "MongoDB",
             data: list,
         });
 
     } catch (err) {
-        next(err); // pass to global error handler
+        next(err);
     }
 };
+
+
+
 
 
 // Details transection
@@ -150,22 +221,131 @@ export const transactionDetailsController = async (req: Request, res: Response, 
 export const updateTransaction = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { id } = req.params;
+
         const parsed = createTransactionSchema.partial().safeParse(req.body);
-        if (!parsed.success) {
-            return next(parsed.error);
-        }
+        if (!parsed.success) return next(parsed.error);
+
         const updates = parsed.data;
-        const updatedTx = await Transaction.findByIdAndUpdate(id, updates, { new: true, runValidators: true, });
+
+        // Update MongoDB FIRST
+        const updatedTx = await Transaction.findByIdAndUpdate(
+            id,
+            updates,
+            { new: true, runValidators: true }
+        );
+
         if (!updatedTx) {
             return res.status(404).json({ message: "Transaction not found" });
         }
-        res.json({
+
+        // Prepare Google Sheet Update Data
+        let googleUpdateData: any = {};
+
+        // sender (convert ID → name)
+        if (updates.sender) {
+            const s = await User.findById(updates.sender);
+            googleUpdateData.sender = s ? s.name : updates.sender;
+        }
+
+        // receiver (convert ID → name)
+        if (updates.receiver) {
+            const r = await User.findById(updates.receiver);
+            googleUpdateData.receiver = r ? r.name : updates.receiver;
+        }
+
+        // MEDIUM LOGIC (ID OR TEXT)
+        if (updates.medium) {
+            const isObjectId = mongoose.Types.ObjectId.isValid(updates.medium);
+
+            if (isObjectId) {
+                // Medium is user ID
+                const m = await User.findById(updates.medium);
+                googleUpdateData.medium = m ? m.name : "";
+            } else {
+                // Medium is simple text → use directly
+                googleUpdateData.medium = updates.medium;
+            }
+        }
+
+        // amount/date
+        if (updates.amount) googleUpdateData.amount = updates.amount;
+        if (updates.date) googleUpdateData.date = updates.date;
+
+        // Update in Google Sheet
+        await updateSheetTransaction(updatedTx.transactionId, googleUpdateData);
+
+        return res.json({
             success: true,
+            source: "MongoDB + Google Sheet",
             message: "Transaction updated successfully",
             updatedTx,
         });
+
     } catch (err) {
-        throw new AppError(401, 'Does not edit')
+        next(new AppError(400, "Failed to update transaction"));
     }
 };
+
+
+
+
+
+
+
+
+// Controller to schedule Opening and Ending automatically
+const scheduleSheetTitles = async () => {
+
+
+    const welcomeSetting = await Setting.findOne({ key: "welcomeInserted" });
+
+    if (!welcomeSetting) {
+        console.log("welcome")
+        await insertMergedTitle("Welcome to Shohag Enterprise!");
+        await Setting.create({ key: "welcomeInserted", value: true });
+    }
+    // 12:01 AM → Opening
+    nodeCron.schedule("50 16 * * *", async () => {
+        try {
+            await insertMergedTitle("Opening ShohagEnterpise");
+        } catch (err) {
+            console.error("Error inserting Opening row:", err);
+        }
+    });
+
+    // 12:00 PM → Ending
+    nodeCron.schedule("52 16 * * *", async () => {
+        try {
+            await insertMergedTitle("Ending Shohag EnterPrise");
+        } catch (err) {
+            console.error("Error inserting Ending row:", err);
+        }
+    });
+
+
+};
+scheduleSheetTitles()
+
+
+
+// Controller to manually insert a title
+export const insertSheetTitleController = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { title } = req.body;
+        if (!title) return res.status(400).json({ message: "Title is required" });
+
+        await insertMergedTitle(title);
+
+        return res.status(200).json({
+            success: true,
+            message: `Inserted '${title}' in Google Sheet`,
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+
+
+
 

@@ -6,7 +6,7 @@ import { google } from "googleapis";
 
 
 
-interface TransactionRow {
+export interface TransactionRow {
     sender: string;
     receiver: string;
     amount: number;
@@ -17,13 +17,10 @@ interface TransactionRow {
 }
 
 
-
-
-
 const creadentTialsValue =
 {
     "type": "service_account",
-    "project_id":`${env.GOOGLE_PROJECT_ID}`,
+    "project_id": `${env.GOOGLE_PROJECT_ID}`,
     "private_key_id": `${env.GOOGLE_PRIVATE_KEY_ID}`,
     "private_key": `${env.GOOGLE_PRIVATE_KEY}`,
     "client_email": `${env.GOOGLE_CLIENT_EMAIL}`,
@@ -36,21 +33,23 @@ const creadentTialsValue =
 }
 
 
+export const auth = new google.auth.GoogleAuth({
+    credentials: creadentTialsValue,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheets = google.sheets({ version: "v4", auth });
+
+
+
+
+
 export async function appendTransactionToSheet(data: TransactionRow) {
-
     try {
-        // Google Auth
-        const auth = new google.auth.GoogleAuth({
-            credentials : creadentTialsValue,
-            scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-        });
-        const sheets = google.sheets({ version: "v4", auth });
-
         // Format date: MM-DD-YY
         const formattedDate = `${String(data.date.getMonth() + 1).padStart(2, "0")}-${String(
             data.date.getDate()
         ).padStart(2, "0")}-${String(data.date.getFullYear()).slice(2)}`;
-
         // Prepare row
         const row = [
             data.sender,
@@ -61,20 +60,15 @@ export async function appendTransactionToSheet(data: TransactionRow) {
             data.createdBy,
             formattedDate,
         ];
-
         // Append to sheet (A:G)
-
         const response = await sheets.spreadsheets.values.append({
-            spreadsheetId : env.SHEET_ID,
+            spreadsheetId: env.SHEET_ID,
             range: "sheet1!A1:G",
             valueInputOption: "USER_ENTERED",
             requestBody: {
                 values: [row],
             },
         });
-
-  
-
         return response.data;
     } catch (err) {
         console.error("Google Sheet append failed:", err);
