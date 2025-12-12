@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { userRouter } from "../modules/user/user.routes"
 import { transectionRouter } from "../modules/Transection/transection.routes"
+import { userSummaryRoute } from "./../modules/UserSummary/userSummary.routes"
 
 export const router = Router()
 
@@ -11,6 +12,9 @@ const moduleRoutes = [
     },{
         path : '/transeciton',
         route : transectionRouter
+    },{
+        path : "/summary",
+        route : userSummaryRoute
     }
 ]
 

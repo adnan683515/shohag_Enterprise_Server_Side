@@ -23,8 +23,6 @@ const startServer = async () => {
     await startServer();
     await scheduleSheetTitles()
     await createAdmin()
-
-    
 })();
 
 

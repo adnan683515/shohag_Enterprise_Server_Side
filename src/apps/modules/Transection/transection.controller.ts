@@ -14,6 +14,7 @@ import { updateSheetTransaction } from "../../utils/googleSheet/updateGoogleShee
 import { insertMergedTitle } from "../../utils/googleSheet/titleCreate";
 import { DailySummary } from '../../modules/UserSummary/userSummary.model'
 import nodeCron from "node-cron";
+import { SeeSummary } from "../UserSummary/userSummary.controller";
 
 
 
@@ -322,16 +323,45 @@ export const updateTransaction = async (req: Request, res: Response, next: NextF
 
 
 
+
+
+
+
+
+
 // Controller to schedule Opening and Ending automatically
 export const scheduleSheetTitles = async () => {
+
+
+
+
+
+    // Schedule cron at 12:05 PM every day (Dhaka time)
+    nodeCron.schedule(
+        "46 17 * * *", // minute 5, hour 12
+        async () => {
+            console.log("Running Daily Summary Cron Job at 12:05 PM");
+            try {
+                await SeeSummary();
+                console.log("Daily Summary added to Google Sheet successfully.");
+            } catch (err) {
+                console.error("Error in Daily Summary Cron Job:", err);
+            }
+        },
+        {
+            timezone: "Asia/Dhaka", // Make sure it runs in Dhaka time
+        }
+    );
+
+
 
 
     const welcomeSetting = await (await User.find()).length
 
     if (welcomeSetting < 1) {
         console.log("welcome")
-        await insertMergedTitle("Welcome to Shohag Enterprise!",1);
-        await insertMergedTitle("Opening ShohagEnterpise",2);
+        await insertMergedTitle("Welcome to Shohag Enterprise!", 1);
+        await insertMergedTitle("Opening ShohagEnterpise", 2);
     }
 
 
@@ -345,7 +375,7 @@ export const scheduleSheetTitles = async () => {
     //     }
     // });
 
-    
+
     // 12:00 PM → Ending
     // nodeCron.schedule("52 16 * * *", async () => {
     //     try {
@@ -357,6 +387,10 @@ export const scheduleSheetTitles = async () => {
 
 
 };
+
+
+
+
 
 
 
