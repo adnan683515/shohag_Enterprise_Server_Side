@@ -13,19 +13,20 @@ export interface AuthRequest extends Request {
 
 export const auth = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+
     const token = req.cookies.AccessToken;  // <-- GET TOKEN FROM COOKIE
+
 
     if (!token) {
       throw new AppError(401, 'No Token Provide!')
     }
-    const decoded = jwt.verify(token, env.ACCESS_TOKEN_SECRET!) as {
-      id: string;
-      email: string;
-      role: string;
-    };
+
+
+    const decoded = jwt.verify(token, env.ACCESS_TOKEN_SECRET!) as { id: string; email: string; role: string; };
 
     req.user = decoded;
     next();
+
   } catch (err: any) {
     next(err)
   }

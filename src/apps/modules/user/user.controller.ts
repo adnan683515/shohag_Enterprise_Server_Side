@@ -4,12 +4,9 @@ import bcrypt from 'bcryptjs';
 import sendOtpEmail from "../../utils/sendOTP";
 import jwt from 'jsonwebtoken';
 import env from "../../config/env";
-import { createUserSchema } from "./../../validations/userValidation/validation";
 import { AppError } from "../../errorHelper/AppError";
 import { AuthRequest } from "apps/middlewares/middleware";
 import z from "zod";
-
-
 
 
 
@@ -282,20 +279,25 @@ export const ForgetPasswordController = async (req: Request, res: Response, next
 
 export const AssignUserUnderAdminController = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+
         const { userId } = req.params;
         if (!userId) throw new AppError(400, "User ID is required");
 
+
         const user = await User.findById(userId);
         if (!user) throw new AppError(404, "User not found");
+
 
         // Find an admin to assign as parent
         const admin = await User.findOne({ role: "admin" });
         if (!admin) throw new AppError(404, "No admin found to assign under");
 
+
         // Update parentId
         user.parentId = admin._id;
         await user.save();
 
+        
         res.json({
             success: true,
             msg: `User assigned under admin '${admin.name}' successfully`,

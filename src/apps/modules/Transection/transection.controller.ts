@@ -12,9 +12,8 @@ import { getTransactionsFromSheet } from "../../utils/googleSheet/getDataFromGoo
 import { updateSheetTransaction } from "../../utils/googleSheet/updateGoogleSheet";
 
 import { insertMergedTitle } from "../../utils/googleSheet/titleCreate";
-import Setting from "../Settings/settings";
+import { DailySummary } from '../../modules/UserSummary/userSummary.model'
 import nodeCron from "node-cron";
-
 
 
 
@@ -23,7 +22,7 @@ import nodeCron from "node-cron";
 
 // admin and subadmin add transaction create
 export const CreateTransectionController = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -36,48 +35,37 @@ export const CreateTransectionController = async (
 
         const { amount, date, sender, receiver, medium } = parsed.data;
         const txDate = date ? new Date(date) : new Date();
+        const txDateStr = txDate.toISOString().split("T")[0]; // YYYY-MM-DD
 
-        // sender
+        // --- Sender ---
         const senderUser = await User.findById(sender);
         if (!senderUser) throw new AppError(404, "Sender not found");
-        if (senderUser.parentId) {
-            throw new AppError(400, `Sender '${senderUser.name}' is not self-dependent`);
-        }
+        if (senderUser.parentId) throw new AppError(400, `Sender '${senderUser.name}' is not self-dependent`);
 
-        // receiver
+        // --- Receiver ---
         const receiverUser = await User.findById(receiver);
         if (!receiverUser) throw new AppError(404, "Receiver not found");
-        if (receiverUser.parentId) {
-            throw new AppError(400, `Receiver '${receiverUser.name}' is not self-dependent`);
-        }
+        if (receiverUser.parentId) throw new AppError(400, `Receiver '${receiverUser.name}' is not self-dependent`);
 
-        // -MEDIUM LOGIC (UserId OR Text) 
-        let mediumName: string = "";     // name for Google Sheet
-        let mediumValueForDB: any = "";  // value saved into MongoDB
-
+        // --- Medium ---
+        let mediumName: string = "";
+        let mediumValueForDB: any = "";
         const isObjectId = mongoose.Types.ObjectId.isValid(medium);
 
         if (isObjectId) {
-            // medium is a USER ID
             const mediumUser = await User.findById(medium);
             if (!mediumUser) throw new AppError(404, "Medium user not found");
-
-            if (!mediumUser.parentId) {
-                throw new AppError(400, `Medium '${mediumUser.name}' is not valid (self-dependent)`);
-            }
-
-            mediumName = mediumUser.name; // Google Sheet
-            mediumValueForDB = medium;    // MongoDB
+            if (!mediumUser.parentId) throw new AppError(400, `Medium '${mediumUser.name}' is not valid (self-dependent)`);
+            mediumName = mediumUser.name;
+            mediumValueForDB = medium;
         } else {
-            // medium is TEXT
             mediumName = medium;
             mediumValueForDB = medium;
         }
 
-
         const txId = generateTransactionId();
 
-        // -Save to MongoDB
+        // --- Save Transaction ---
         const tx = await Transaction.create({
             amount,
             date: txDate,
@@ -89,12 +77,55 @@ export const CreateTransectionController = async (
             createdBy: req.user!.role,
         });
 
-        // Save also into Google Sheet
+        // --- Update DailySummary ---
+        let dailySummary = await DailySummary.findOne({
+            date: txDateStr,
+            $or: [
+                { senderSummaryId: sender, receiverSummaryId: receiver },
+                { senderSummaryId: receiver, receiverSummaryId: sender }
+            ]
+        });
+
+        if (!dailySummary) {
+            // No summary exists, create new
+            dailySummary = await DailySummary.create({
+                date: txDateStr,
+                senderSummaryId: sender,
+                senderSentAmount: amount,
+                senderReceivedAmount: 0,
+                receiverSummaryId: receiver,
+                receiverSentAmount: 0,
+                receiverReceivedAmount: amount,
+                topSenderId: sender
+            });
+        } else {
+            // Summary exists, check role flip
+            if (dailySummary.senderSummaryId.toString() === sender.toString()) {
+                // Normal order
+                dailySummary.senderSentAmount += amount;
+                dailySummary.receiverReceivedAmount += amount;
+            } else {
+                // Roles flipped
+                dailySummary.receiverSentAmount += amount;
+                dailySummary.senderReceivedAmount += amount;
+            }
+
+            // Update topSenderId
+            if (dailySummary.senderSentAmount >= dailySummary.receiverSentAmount) {
+                dailySummary.topSenderId = dailySummary.senderSummaryId;
+            } else {
+                dailySummary.topSenderId = dailySummary.receiverSummaryId;
+            }
+
+            await dailySummary.save();
+        }
+
+        // --- Google Sheet Logging ---
         const sheetData = {
             sender: senderUser.name,
             receiver: receiverUser.name,
             amount,
-            medium: mediumName,      // sheet gets name/text
+            medium: mediumName,
             transactionId: txId,
             createdBy: req.user!.role,
             date: txDate,
@@ -291,59 +322,61 @@ export const updateTransaction = async (req: Request, res: Response, next: NextF
 
 
 
-
-
 // Controller to schedule Opening and Ending automatically
-const scheduleSheetTitles = async () => {
+export const scheduleSheetTitles = async () => {
 
 
-    const welcomeSetting = await Setting.findOne({ key: "welcomeInserted" });
+    const welcomeSetting = await (await User.find()).length
 
-    if (!welcomeSetting) {
+    if (welcomeSetting < 1) {
         console.log("welcome")
-        await insertMergedTitle("Welcome to Shohag Enterprise!");
-        await Setting.create({ key: "welcomeInserted", value: true });
+        await insertMergedTitle("Welcome to Shohag Enterprise!",1);
+        await insertMergedTitle("Opening ShohagEnterpise",2);
     }
-    // 12:01 AM → Opening
-    nodeCron.schedule("50 16 * * *", async () => {
-        try {
-            await insertMergedTitle("Opening ShohagEnterpise");
-        } catch (err) {
-            console.error("Error inserting Opening row:", err);
-        }
-    });
 
+
+
+    // 12:01 AM → Opening
+    // nodeCron.schedule("50 16 * * *", async () => {
+    //     try {
+    //         await insertMergedTitle("Opening ShohagEnterpise");
+    //     } catch (err) {
+    //         console.error("Error inserting Opening row:", err);
+    //     }
+    // });
+
+    
     // 12:00 PM → Ending
-    nodeCron.schedule("52 16 * * *", async () => {
-        try {
-            await insertMergedTitle("Ending Shohag EnterPrise");
-        } catch (err) {
-            console.error("Error inserting Ending row:", err);
-        }
-    });
+    // nodeCron.schedule("52 16 * * *", async () => {
+    //     try {
+    //         await insertMergedTitle("Ending Shohag EnterPrise");
+    //     } catch (err) {
+    //         console.error("Error inserting Ending row:", err);
+    //     }
+    // });
 
 
 };
-scheduleSheetTitles()
+
 
 
 
 // Controller to manually insert a title
-export const insertSheetTitleController = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const { title } = req.body;
-        if (!title) return res.status(400).json({ message: "Title is required" });
+// export const insertSheetTitleController = async (req: Request, res: Response, next: NextFunction) => {
+//     try {
+//         const { title } = req.body;
+//         if (!title) return res.status(400).json({ message: "Title is required" });
 
-        await insertMergedTitle(title);
+//         await insertMergedTitle(title);
 
-        return res.status(200).json({
-            success: true,
-            message: `Inserted '${title}' in Google Sheet`,
-        });
-    } catch (err) {
-        next(err);
-    }
-};
+//         return res.status(200).json({
+//             success: true,
+//             message: `Inserted '${title}' in Google Sheet`,
+//         });
+//     } catch (err) {
+//         next(err);
+//     }
+// };
 
 
 

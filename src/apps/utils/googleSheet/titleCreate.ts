@@ -2,7 +2,7 @@ import { google } from "googleapis";
 import { auth } from "../../utils/googleSheet/appendGoogleSheet";
 import env from "../../config/env";
 
-export const insertMergedTitle = async (title: string) => {
+export const insertMergedTitle = async (title: string,emptyOFnumber : number) => {
   const sheets = google.sheets({ version: "v4", auth });
 
   // 1. Get all values in column A to find the first empty row
@@ -12,7 +12,7 @@ export const insertMergedTitle = async (title: string) => {
   });
 
   const rows = response.data.values || [];
-  const firstEmptyRow = rows.length + 2;
+  const firstEmptyRow = rows.length + emptyOFnumber;
 
   // 2. Build the title with underscores for styling
   const fullTitle = `________________________________ ${title} __________________________________`;

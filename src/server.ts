@@ -4,6 +4,7 @@
 import mongoose from "mongoose";
 import { app } from "./app";
 import { createAdmin } from "./apps/utils/createAdmin";
+import { scheduleSheetTitles } from "./apps/modules/Transection/transection.controller";
 
 
 
@@ -20,7 +21,10 @@ const startServer = async () => {
 
 (async () => {
     await startServer();
+    await scheduleSheetTitles()
     await createAdmin()
+
+    
 })();
 
 
