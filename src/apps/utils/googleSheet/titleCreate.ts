@@ -48,5 +48,4 @@ export const insertMergedTitle = async (title: string,emptyOFnumber : number) =>
     },
   });
 
-  console.log(`Inserted merged title "${title}" at row ${firstEmptyRow}`);
 };
