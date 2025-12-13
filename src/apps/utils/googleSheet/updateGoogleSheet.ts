@@ -8,7 +8,7 @@ import env from "../../config/env";
 export const updateSheetTransaction = async (transactionId: string, updates: any) => {
     const sheets = google.sheets({ version: "v4", auth });
 
-    // 1Get full sheet data
+    // Get full sheet data
     const response = await sheets.spreadsheets.values.get({
         spreadsheetId: env.SHEET_ID,
         range: "Sheet1!A:G",

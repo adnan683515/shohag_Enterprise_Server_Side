@@ -15,7 +15,7 @@ export const transectionRouter = Router()
 transectionRouter.get('/all-transection', auth, viewallTransectionController) //view all transection
 
 
-transectionRouter.post('/createTransection',auth,adminOrSubadmin, CreateTransectionController ) //create transection
+// transectionRouter.post('/createTransection',auth,adminOrSubadmin, CreateTransectionController ) //create transection
 
 
 transectionRouter.post('/createTransection',auth,adminOrSubadmin, CreateTransectionController ) //create transection

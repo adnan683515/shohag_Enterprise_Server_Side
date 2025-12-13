@@ -50,25 +50,17 @@ export async function appendTransactionToSheet(data: TransactionRow) {
         const formattedDate = `${String(data.date.getMonth() + 1).padStart(2, "0")}-${String(
             data.date.getDate()
         ).padStart(2, "0")}-${String(data.date.getFullYear()).slice(2)}`;
+
         // Prepare row
-        const row = [
-            data.sender,
-            data.receiver,
-            data.amount,
-            data.medium,
-            data.transactionId,
-            data.createdBy,
-            formattedDate,
-        ];
+
+        const row = [data.sender, data.receiver, data.amount, data.medium, data.transactionId, data.createdBy, formattedDate];
         // Append to sheet (A:G)
+
         const response = await sheets.spreadsheets.values.append({
-            spreadsheetId: env.SHEET_ID,
-            range: "sheet1!A1:G",
-            valueInputOption: "USER_ENTERED",
-            requestBody: {
-                values: [row],
-            },
+            spreadsheetId: env.SHEET_ID, range: "sheet1!A1:G", valueInputOption: "USER_ENTERED", requestBody: { values: [row] },
         });
+
+        
         return response.data;
     } catch (err) {
         console.error("Google Sheet append failed:", err);

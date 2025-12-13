@@ -15,6 +15,9 @@ import { insertMergedTitle } from "../../utils/googleSheet/titleCreate";
 import { DailySummary } from '../../modules/UserSummary/userSummary.model'
 import nodeCron from "node-cron";
 import { SeeSummary } from "../UserSummary/userSummary.controller";
+import { google } from "googleapis";
+import { auth } from '../../utils/googleSheet/appendGoogleSheet'
+import env from "../../config/env";
 
 
 
@@ -22,13 +25,38 @@ import { SeeSummary } from "../UserSummary/userSummary.controller";
 
 
 // admin and subadmin add transaction create
-export const CreateTransectionController = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
+const parseSheetDate = (dateStr: string): string | null => {
+    // Assuming the sheet format is DD-MM-YY (e.g., 13-12-25)
     try {
-        // Validate body
+        const parts = dateStr.trim().split(/[-/.]/); // Split by '-', '/', or '.'
+        if (parts.length < 3) return null;
+
+        // Extract and clean parts
+        const [dayStr, monthStr, yearStr] = parts.map(p => p.padStart(2, '0'));
+
+        // Convert YY to YYYY (e.g., 25 -> 2025). Assumes 21st century.
+        let fullYear: number;
+        if (yearStr.length === 2) {
+            fullYear = parseInt(`20${yearStr}`);
+        } else if (yearStr.length === 4) {
+            fullYear = parseInt(yearStr);
+        } else {
+            return null; // Invalid year format
+        }
+
+        const paddedMonth = monthStr.padStart(2, '0');
+        const paddedDay = dayStr.padStart(2, '0');
+
+        return `${fullYear}-${paddedMonth}-${paddedDay}`; // Returns YYYY-MM-DD
+    } catch (e) {
+        console.error("Error parsing sheet date:", e);
+        return null;
+    }
+};
+
+export const CreateTransectionController = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        // 1️⃣ Validate request body
         const parsed = createTransactionSchema.safeParse(req.body);
         if (!parsed.success) {
             throw new AppError(400, "Validation Error Create Transaction!");
@@ -36,37 +64,35 @@ export const CreateTransectionController = async (
 
         const { amount, date, sender, receiver, medium } = parsed.data;
         const txDate = date ? new Date(date) : new Date();
-        const txDateStr = txDate.toISOString().split("T")[0]; // YYYY-MM-DD
+        const txDateStr = txDate.toISOString().split("T")[0]; // YYYY-MM-DD (Used for DB and comparison)
 
-        // --- Sender ---
+        // 2️⃣ Get sender
         const senderUser = await User.findById(sender);
         if (!senderUser) throw new AppError(404, "Sender not found");
         if (senderUser.parentId) throw new AppError(400, `Sender '${senderUser.name}' is not self-dependent`);
 
-        // --- Receiver ---
+        // 3️⃣ Get receiver
         const receiverUser = await User.findById(receiver);
         if (!receiverUser) throw new AppError(404, "Receiver not found");
         if (receiverUser.parentId) throw new AppError(400, `Receiver '${receiverUser.name}' is not self-dependent`);
 
-        // --- Medium ---
+        // 4️⃣ Get medium
         let mediumName: string = "";
         let mediumValueForDB: any = "";
-        const isObjectId = mongoose.Types.ObjectId.isValid(medium);
-
-        if (isObjectId) {
+        if (mongoose.Types.ObjectId.isValid(medium)) {
             const mediumUser = await User.findById(medium);
             if (!mediumUser) throw new AppError(404, "Medium user not found");
             if (!mediumUser.parentId) throw new AppError(400, `Medium '${mediumUser.name}' is not valid (self-dependent)`);
             mediumName = mediumUser.name;
             mediumValueForDB = medium;
         } else {
-            mediumName = medium;
+            mediumName = medium; // Assuming 'self' or similar literal string
             mediumValueForDB = medium;
         }
 
         const txId = generateTransactionId();
 
-        // --- Save Transaction ---
+        // 5️⃣ Save Transaction in MongoDB
         const tx = await Transaction.create({
             amount,
             date: txDate,
@@ -75,10 +101,102 @@ export const CreateTransectionController = async (
             medium: mediumValueForDB,
             transactionId: txId,
             year: txDate.getFullYear(),
-            createdBy: req.user!.role,
+            createdBy: req.user!.role, // Assuming req.user is populated by middleware
         });
 
-        // --- Update DailySummary ---
+        // 6️⃣ Google Sheets Integration: Find Insertion Index
+        const sheets = google.sheets({ version: "v4", auth });
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: env.SHEET_ID,
+            range: "Sheet1!A:G",
+        });
+
+        const rows = response.data.values || [];
+        let insertRowIndex = rows.length; // Default: Append at bottom (if no date is provided or it's the latest date)
+
+        // Use YYYY-MM-DD format for reliable string comparison
+        const newTxDateStr = date ? txDateStr : null;
+
+        if (newTxDateStr) {
+            // Loop starts at index 1 to skip the header row (index 0)
+            for (let i = 1; i < rows.length; i++) {
+                const rowDateFromSheet = rows[i][6]; // Date column index (G)
+
+                if (!rowDateFromSheet) continue; // Skip rows with missing dates
+
+                const rowDateStr = parseSheetDate(rowDateFromSheet);
+                if (!rowDateStr) continue; // Skip if date parsing failed
+
+                // Compare the new date (YYYY-MM-DD string) with the sheet date
+                if (newTxDateStr < rowDateStr) {
+                    // New transaction is *chronologically earlier* → insert *before* this row
+                    insertRowIndex = i;
+                    break;
+                } else if (newTxDateStr === rowDateStr) {
+                    // New transaction is on the *same date* → insert * after * all transactions on this date
+                    let lastSameDateIndex = i;
+
+                    // Continue checking rows until the date changes or we hit the end
+                    while (lastSameDateIndex + 1 < rows.length) {
+                        const nextRowDateFromSheet = rows[lastSameDateIndex + 1][6];
+                        if (!nextRowDateFromSheet) break;
+
+                        const nextRowDateStr = parseSheetDate(nextRowDateFromSheet);
+
+                        if (nextRowDateStr === newTxDateStr) {
+                            lastSameDateIndex++;
+                        } else {
+                            break;
+                        }
+                    }
+                    insertRowIndex = lastSameDateIndex + 1; // Insert after the last matching date row
+                    break;
+                }
+                // If (newTxDateStr > rowDateStr), the new transaction is later, so we continue to the next row
+            }
+        }
+
+        // 6a️⃣ Insert empty row at the calculated index
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: env.SHEET_ID,
+            requestBody: {
+                requests: [
+                    {
+                        insertDimension: {
+                            range: {
+                                sheetId: 0, // Assuming Sheet1 is the first sheet (gid=0)
+                                dimension: "ROWS",
+                                startIndex: insertRowIndex, // Index is 0-based
+                                endIndex: insertRowIndex + 1,
+                            },
+                            inheritFromBefore: false,
+                        },
+                    },
+                ],
+            },
+        });
+
+        // 6b️⃣ Insert transaction row into the newly created empty row
+        const txRow = [
+            senderUser.name,
+            receiverUser.name,
+            amount,
+            mediumName,
+            txId,
+            req.user!.role,
+            date || txDateStr // Use the original user input date for the sheet if available
+        ];
+
+        // The range uses 1-based indexing (A1 notation), so we use insertRowIndex + 1
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: env.SHEET_ID,
+            range: `Sheet1!A${insertRowIndex + 1}:G${insertRowIndex + 1}`,
+            valueInputOption: "USER_ENTERED",
+            requestBody: { values: [txRow] },
+        });
+
+        // 7️⃣ Update DailySummary
+        // ... (DailySummary logic remains the same) ...
         let dailySummary = await DailySummary.findOne({
             date: txDateStr,
             $or: [
@@ -88,7 +206,6 @@ export const CreateTransectionController = async (
         });
 
         if (!dailySummary) {
-            // No summary exists, create new
             dailySummary = await DailySummary.create({
                 date: txDateStr,
                 senderSummaryId: sender,
@@ -100,53 +217,34 @@ export const CreateTransectionController = async (
                 topSenderId: sender
             });
         } else {
-            // Summary exists, check role flip
             if (dailySummary.senderSummaryId.toString() === sender.toString()) {
-                // Normal order
                 dailySummary.senderSentAmount += amount;
                 dailySummary.receiverReceivedAmount += amount;
             } else {
-                // Roles flipped
                 dailySummary.receiverSentAmount += amount;
                 dailySummary.senderReceivedAmount += amount;
             }
 
-            // Update topSenderId
-            if (dailySummary.senderSentAmount >= dailySummary.receiverSentAmount) {
-                dailySummary.topSenderId = dailySummary.senderSummaryId;
-            } else {
-                dailySummary.topSenderId = dailySummary.receiverSummaryId;
-            }
+            dailySummary.topSenderId =
+                dailySummary.senderSentAmount >= dailySummary.receiverSentAmount
+                    ? dailySummary.senderSummaryId
+                    : dailySummary.receiverSummaryId;
 
             await dailySummary.save();
         }
 
-        // --- Google Sheet Logging ---
-        const sheetData = {
-            sender: senderUser.name,
-            receiver: receiverUser.name,
-            amount,
-            medium: mediumName,
-            transactionId: txId,
-            createdBy: req.user!.role,
-            date: txDate,
-        };
-
-        await appendTransactionToSheet(sheetData);
-
+        // 8️⃣ Return response
         res.json({
             success: true,
             message: "Transaction created successfully",
             data: tx,
-            sheetEntry: sheetData,
+            sheetEntry: txRow,
         });
 
     } catch (err) {
         next(err);
     }
 };
-
-
 
 
 // view all transactions
@@ -322,23 +420,12 @@ export const updateTransaction = async (req: Request, res: Response, next: NextF
 
 
 
-
-
-
-
-
-
-
 // Controller to schedule Opening and Ending automatically
 export const scheduleSheetTitles = async () => {
 
-
-
-
-
     // Schedule cron at 12:05 PM every day (Dhaka time)
     nodeCron.schedule(
-        "46 17 * * *", // minute 5, hour 12
+        "14 11 * * *", // minute 14, hour 11
         async () => {
             console.log("Running Daily Summary Cron Job at 12:05 PM");
             try {
@@ -387,10 +474,6 @@ export const scheduleSheetTitles = async () => {
 
 
 };
-
-
-
-
 
 
 
