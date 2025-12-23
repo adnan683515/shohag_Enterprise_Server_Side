@@ -14,7 +14,8 @@ export interface AuthRequest extends Request {
 export const auth = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
 
-    const token = req.cookies.AccessToken;  // <-- GET TOKEN FROM COOKIE
+    const token = req.cookies.AccessToken || req?.headers?.authorization?.split(' ')[1] ;  // <-- GET TOKEN FROM COOKIE
+
 
 
     if (!token) {

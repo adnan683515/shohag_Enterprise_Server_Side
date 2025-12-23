@@ -2,7 +2,7 @@ import e, { NextFunction, Request, Response } from "express";
 import { User } from "./user.model";
 import bcrypt from 'bcryptjs';
 import sendOtpEmail from "../../utils/sendOTP";
-import jwt from 'jsonwebtoken';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 import env from "../../config/env";
 import { AppError } from "../../errorHelper/AppError";
 import { AuthRequest } from "apps/middlewares/middleware";
@@ -11,20 +11,75 @@ import z from "zod";
 
 
 
+export const RefreshTokenController = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+) => {
+    try {
+        // 1️⃣ Cookie থেকে refresh token নাও
+        const refreshToken = req.cookies?.refreshToken;
+
+        if (!refreshToken) {
+            throw new AppError(401, "Refresh token not found");
+        }
+
+        // 2️⃣ Refresh token verify করো
+        const decoded = jwt.verify(
+            refreshToken,
+            env.REFRESH_TOKEN_SECRET!
+        ) as JwtPayload;
+
+        // 3️⃣ User আছে কিনা check
+        const user = await User.findById(decoded.id);
+        if (!user) {
+            throw new AppError(401, "User not found");
+        }
+
+        // 4️⃣ নতুন access token generate করো
+        const newAccessToken = jwt.sign(
+            {
+                id: user._id,
+                email: user.email,
+                role: user.role,
+            },
+            env.ACCESS_TOKEN_SECRET!,
+            { expiresIn: "1h" }
+        );
+
+        // 5️⃣ (optional) cookie তে set করা
+        res.cookie("AccessToken", newAccessToken, {
+            httpOnly: true,
+            secure: false, // production e true
+            sameSite: "strict",
+            maxAge: 60 * 60 * 1000,
+        });
+
+        // 6️⃣ response পাঠাও
+        res.status(200).json({
+            status: "success",
+            message: "New access token generated",
+            data: {
+                accessToken: newAccessToken,
+                type: "Bearer",
+                expiresIn: 3600,
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 
 // register controller
 export const RegisterUserController = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { name, email, password } = req.body;
-
         const exists = await User.findOne({ email });
         if (exists) return res.status(400).json({ msg: "User already exists" });
-
         const hashed = await bcrypt.hash(password, 10);
-
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
         const otpExpiresAt = new Date(Date.now() + 30 * 1000); // 20 seconds
-
         await User.create({
             name,
             email,
@@ -33,11 +88,8 @@ export const RegisterUserController = async (req: Request, res: Response, next: 
             otp,
             otpExpiresAt
         });
-
         await sendOtpEmail(email, otp);
-
         res.json({ msg: "OTP sent to email" });
-
     } catch (err) {
         next(err);
     }
@@ -47,14 +99,12 @@ export const RegisterUserController = async (req: Request, res: Response, next: 
 export const LoginController = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { email, password } = req.body;
+        console.log(email, password)
         const user = await User.findOne({ email });
         if (!user) throw new AppError(400, "Invalid email or password")
-
         if (!user?.isVerified) throw new AppError(401, "Your gmail is not varified")
-
         const ok = await bcrypt.compare(password, user.password as string);
         if (!ok) throw new AppError(400, "Invalid email or password")
-
 
         // CREATE ACCESS + REFRESH TOKEN
         const accessToken = jwt.sign(
@@ -65,7 +115,7 @@ export const LoginController = async (req: Request, res: Response, next: NextFun
 
         const refreshToken = jwt.sign(
             { id: user._id },
-            env.ACCESS_TOKEN_SECRET!,
+            env.REFRESH_TOKEN_SECRET!,
             { expiresIn: "7d" }
         );
 
@@ -115,53 +165,39 @@ export const LoginController = async (req: Request, res: Response, next: NextFun
 // verify otp
 export const VerifyOTPController = async (req: Request, res: Response) => {
     const { email, otp } = req.body;
-
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ msg: "User not found" });
-
     if (!user.otpExpiresAt || Date.now() > user.otpExpiresAt.getTime()) {
         user.otp = "";
         user.otpExpiresAt = null;
         await user.save();
         return res.status(400).json({ msg: "OTP expired" });
     }
-
     if (user.otp !== otp) {
         return res.status(400).json({ msg: "Invalid OTP" });
     }
-
     user.isVerified = true;
     user.otp = "";
     user.otpExpiresAt = null;
-
     await user.save();
-
     res.json({ msg: "Verification successful!" });
 };
 
 // resend otp
-export const ResendOTPController = async (req: Request, res: Response , next :  NextFunction) => {
+export const ResendOTPController = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { email } = req.body;
-
         const user = await User.findOne({ email });
-        if (!user) throw new AppError(404,"User not found" )
-
+        if (!user) throw new AppError(404, "User not found")
         if (user.isVerified)
-            throw new AppError(400,"User already verified")
-
+            throw new AppError(400, "User already verified")
         // Generate new 4-digit OTP
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
-
         user.otp = otp;
-        user.otpExpiresAt =  new Date(Date.now() + 30 * 1000); // 20 seconds
-
+        user.otpExpiresAt = new Date(Date.now() + 30 * 1000); // 20 seconds
         await user.save();
-
         await sendOtpEmail(email, otp);
-
         return res.json({ msg: "New OTP sent" });
-
     } catch (error) {
         next(error)
     }
@@ -276,7 +312,6 @@ export const ForgetPasswordController = async (req: Request, res: Response, next
 
 
 
-
 export const AssignUserUnderAdminController = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
 
@@ -297,7 +332,7 @@ export const AssignUserUnderAdminController = async (req: AuthRequest, res: Resp
         user.parentId = admin._id;
         await user.save();
 
-        
+
         res.json({
             success: true,
             msg: `User assigned under admin '${admin.name}' successfully`,
@@ -312,3 +347,5 @@ export const AssignUserUnderAdminController = async (req: AuthRequest, res: Resp
         next(err);
     }
 };
+
+
