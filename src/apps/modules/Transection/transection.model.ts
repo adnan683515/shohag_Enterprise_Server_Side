@@ -1,42 +1,43 @@
-import mongoose from "mongoose";
+import mongoose, { Schema } from "mongoose";
 
-// TRANSACTION MODEL
-const TxSchema = new mongoose.Schema({
+const TxSchema = new Schema({
     amount: {
         type: Number,
-        required: true
+        required: true,
     },
     date: {
         type: Date,
-        default: Date.now   // auto today date
+        default: Date.now,
     },
     year: {
         type: Number,
-        default: () => new Date().getFullYear()  // auto year
+        default: () => new Date().getFullYear(),
     },
+
     sender: {
-        type: String,
-        required: true
+        type: Schema.Types.ObjectId,
+        ref: "User",          // 🔥 MUST
+        required: true,
     },
 
     receiver: {
-        type: String,
-        required: true
+        type: Schema.Types.ObjectId,
+        ref: "User",          // 🔥 MUST
+        required: true,
     },
+
     createdBy: {
         type: String,
-        required: true
+        required: true,
     },
-    medium : {
-        type : String,
-        required : true
-
+    medium: {
+        type: String,
+        required: true,
     },
-    transactionId : {
-        type : String,
-        required : true
-    }
+    transactionId: {
+        type: String,
+        required: true,
+    },
 });
-
 
 export const Transaction = mongoose.model("Transaction", TxSchema);

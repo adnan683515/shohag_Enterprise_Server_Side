@@ -56,7 +56,7 @@ const parseSheetDate = (dateStr: string): string | null => {
 
 export const CreateTransectionController = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        // 1️⃣ Validate request body
+        // 1Validate request body
         const parsed = createTransactionSchema.safeParse(req.body);
         if (!parsed.success) {
             throw new AppError(400, "Validation Error Create Transaction!");
@@ -66,17 +66,17 @@ export const CreateTransectionController = async (req: Request, res: Response, n
         const txDate = date ? new Date(date) : new Date();
         const txDateStr = txDate.toISOString().split("T")[0]; // YYYY-MM-DD (Used for DB and comparison)
 
-        // 2️⃣ Get sender
+        // Get sender
         const senderUser = await User.findById(sender);
         if (!senderUser) throw new AppError(404, "Sender not found");
         if (senderUser.parentId) throw new AppError(400, `Sender '${senderUser.name}' is not self-dependent`);
 
-        // 3️⃣ Get receiver
+        // Get receiver
         const receiverUser = await User.findById(receiver);
         if (!receiverUser) throw new AppError(404, "Receiver not found");
         if (receiverUser.parentId) throw new AppError(400, `Receiver '${receiverUser.name}' is not self-dependent`);
 
-        // 4️⃣ Get medium
+        // Get medium
         let mediumName: string = "";
         let mediumValueForDB: any = "";
         if (mongoose.Types.ObjectId.isValid(medium)) {
@@ -92,7 +92,7 @@ export const CreateTransectionController = async (req: Request, res: Response, n
 
         const txId = generateTransactionId();
 
-        // 5️⃣ Save Transaction in MongoDB
+        // Save Transaction in MongoDB
         const tx = await Transaction.create({
             amount,
             date: txDate,
@@ -294,7 +294,8 @@ export const viewallTransectionController = async (
             }
         }
 
-        let list = await Transaction.find(query).sort({ date: -1 });
+        let list = await Transaction.find(query).sort({ date: -1 }).populate('sender','email name role _id').populate('receiver','name role email _id')
+        
 
         // If user is provided but no MongoDB results, fallback to Google Sheet
         if (user && list.length < 1) {
@@ -302,6 +303,7 @@ export const viewallTransectionController = async (
             const userName = getUserName?.name;
             if (userName) {
                 const transectionDataFromSheet = await getTransactionsFromSheet(userName);
+
                 return res.json({
                     success: true,
                     count: transectionDataFromSheet.length,
