@@ -79,14 +79,17 @@ export const CreateTransectionController = async (req: Request, res: Response, n
         // Get medium
         let mediumName: string = "";
         let mediumValueForDB: any = "";
+
         if (mongoose.Types.ObjectId.isValid(medium)) {
             const mediumUser = await User.findById(medium);
-            if (!mediumUser) throw new AppError(404, "Medium user not found");
-            if (!mediumUser.parentId) throw new AppError(400, `Medium '${mediumUser.name}' is not valid (self-dependent)`);
+
+            if (!mediumUser) {
+                throw new AppError(404, "Medium user not found");
+            }
             mediumName = mediumUser.name;
             mediumValueForDB = medium;
         } else {
-            mediumName = medium; // Assuming 'self' or similar literal string
+            mediumName = medium;
             mediumValueForDB = medium;
         }
 
@@ -294,8 +297,8 @@ export const viewallTransectionController = async (
             }
         }
 
-        let list = await Transaction.find(query).sort({ date: -1 }).populate('sender','email name role _id').populate('receiver','name role email _id')
-        
+        let list = await Transaction.find(query).sort({ date: -1 }).populate('sender', 'email name role _id').populate('receiver', 'name role email _id')
+
 
         // If user is provided but no MongoDB results, fallback to Google Sheet
         if (user && list.length < 1) {
@@ -455,49 +458,10 @@ export const scheduleSheetTitles = async () => {
 
 
 
-    // 12:01 AM → Opening
-    // nodeCron.schedule("50 16 * * *", async () => {
-    //     try {
-    //         await insertMergedTitle("Opening ShohagEnterpise");
-    //     } catch (err) {
-    //         console.error("Error inserting Opening row:", err);
-    //     }
-    // });
+ 
 
-
-    // 12:00 PM → Ending
-    // nodeCron.schedule("52 16 * * *", async () => {
-    //     try {
-    //         await insertMergedTitle("Ending Shohag EnterPrise");
-    //     } catch (err) {
-    //         console.error("Error inserting Ending row:", err);
-    //     }
-    // });
 
 
 };
-
-
-
-
-// Controller to manually insert a title
-// export const insertSheetTitleController = async (req: Request, res: Response, next: NextFunction) => {
-//     try {
-//         const { title } = req.body;
-//         if (!title) return res.status(400).json({ message: "Title is required" });
-
-//         await insertMergedTitle(title);
-
-//         return res.status(200).json({
-//             success: true,
-//             message: `Inserted '${title}' in Google Sheet`,
-//         });
-//     } catch (err) {
-//         next(err);
-//     }
-// };
-
-
-
 
 
